@@ -30,17 +30,18 @@ GEM
       rack-protection (= 4.2.1)
       rack-session (>= 2.0.0, < 3)
       tilt (~> 2.0)
+    sqlite3 (2.10.2-arm64-darwin)
     tilt (2.9.0)
 
 PLATFORMS
   arm64-darwin-25
-  ruby
 
 DEPENDENCIES
   minitest
   puma
   rack-test
   sinatra
+  sqlite3
 
 CHECKSUMS
   base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
@@ -57,6 +58,7 @@ CHECKSUMS
   rack-session (2.1.2) sha256=595434f8c0c3473ae7d7ac56ecda6cc6dfd9d37c0b2b5255330aa1576967ffe8
   rack-test (2.3.0) sha256=b118d177cc002c572fc1b6fd8d19c9ed5881a36e8d6f689f9e618f9f861241e8
   sinatra (4.2.1) sha256=b7aeb9b11d046b552972ade834f1f9be98b185fa8444480688e3627625377080
+  sqlite3 (2.10.2-arm64-darwin) sha256=5b0d235ea037e6dcd1b8387a19d73be571917db9f93044d35741cf933a21a37d
   tilt (2.9.0) sha256=da5735d0280bba96e9a91041bb14aee435ccad5c17b0fa519249ae543d9aa3a5
 
 RUBY VERSION
