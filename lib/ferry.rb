@@ -1,4 +1,6 @@
 require_relative "ferry/config"
 require_relative "ferry/db"
+require_relative "ferry/api_error"
 require_relative "ferry/telegram"
+require_relative "ferry/max"
 require_relative "ferry/app"

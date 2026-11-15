@@ -49,7 +49,7 @@ class TelegramTest < Minitest::Test
   def test_rate_limit_is_retryable_and_has_retry_after
     http = FakeHTTP.new(failure(429, "Too Many Requests: retry after 5", retry_after: 5))
 
-    error = assert_raises(Ferry::Telegram::Error) { telegram(http).send_message(topic_id: 1, text: "x") }
+    error = assert_raises(Ferry::ApiError) { telegram(http).send_message(topic_id: 1, text: "x") }
 
     assert_equal 429, error.code
     assert_equal 5, error.retry_after
@@ -59,7 +59,7 @@ class TelegramTest < Minitest::Test
   def test_bad_request_is_not_retryable
     http = FakeHTTP.new(failure(400, "Bad Request: message thread not found"))
 
-    error = assert_raises(Ferry::Telegram::Error) { telegram(http).send_message(topic_id: 1, text: "x") }
+    error = assert_raises(Ferry::ApiError) { telegram(http).send_message(topic_id: 1, text: "x") }
 
     assert_equal 400, error.code
     refute error.retryable?
@@ -68,7 +68,7 @@ class TelegramTest < Minitest::Test
   def test_server_error_is_retryable
     http = FakeHTTP.new(failure(502, "Bad Gateway"))
 
-    error = assert_raises(Ferry::Telegram::Error) { telegram(http).send_message(topic_id: 1, text: "x") }
+    error = assert_raises(Ferry::ApiError) { telegram(http).send_message(topic_id: 1, text: "x") }
 
     assert error.retryable?
   end
@@ -76,7 +76,7 @@ class TelegramTest < Minitest::Test
   def test_network_error_is_retryable
     http = FakeHTTP.new(Errno::ECONNREFUSED.new)
 
-    error = assert_raises(Ferry::Telegram::Error) { telegram(http).send_message(topic_id: 1, text: "x") }
+    error = assert_raises(Ferry::ApiError) { telegram(http).send_message(topic_id: 1, text: "x") }
 
     assert_nil error.code
     assert error.retryable?
@@ -85,7 +85,7 @@ class TelegramTest < Minitest::Test
   def test_non_json_reply_is_retryable
     http = FakeHTTP.new("<html>502 Bad Gateway</html>")
 
-    error = assert_raises(Ferry::Telegram::Error) { telegram(http).send_message(topic_id: 1, text: "x") }
+    error = assert_raises(Ferry::ApiError) { telegram(http).send_message(topic_id: 1, text: "x") }
 
     assert error.retryable?
   end

@@ -3,3 +3,5 @@ data/
 *.db
 .bundle/
 vendor/bundle/
+*.crt
+*.pem

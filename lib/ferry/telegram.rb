@@ -1,25 +1,11 @@
 require "json"
 require "net/http"
-require "openssl"
+
+require_relative "api_error"
 
 module Ferry
   class Telegram
-    class Error < StandardError
-      attr_reader :code, :retry_after
-
-      def initialize(message, code: nil, retry_after: nil)
-        super(message)
-        @code = code
-        @retry_after = retry_after
-      end
-
-      def retryable? = code.nil? || code == 429 || code >= 500
-    end
-
     API_URL = "https://api.telegram.org".freeze
-    TRANSIENT_ERRORS = [
-      SocketError, SystemCallError, IOError, Timeout::Error, OpenSSL::SSL::SSLError, JSON::ParserError
-    ].freeze
 
     def initialize(token, group_id, http: Net::HTTP)
       @token = token
@@ -47,11 +33,11 @@ module Ferry
       reply = JSON.parse(@http.post(uri, body, "Content-Type" => "application/json").body)
       return reply["result"] if reply["ok"]
 
-      raise Error.new("#{method}: #{reply["description"]}",
-                      code: reply["error_code"],
-                      retry_after: reply.dig("parameters", "retry_after"))
-    rescue *TRANSIENT_ERRORS => e
-      raise Error, "#{method}: #{e.class}: #{e.message}"
+      raise ApiError.new("#{method}: #{reply["description"]}",
+                         code: reply["error_code"],
+                         retry_after: reply.dig("parameters", "retry_after"))
+    rescue *ApiError::TRANSIENT => e
+      raise ApiError, "#{method}: #{e.class}: #{e.message}"
     end
   end
 end
