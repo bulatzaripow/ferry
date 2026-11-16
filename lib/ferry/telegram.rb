@@ -14,23 +14,26 @@ module Ferry
     end
 
     def send_message(topic_id:, text:)
-      request("sendMessage", message_thread_id: topic_id, text: text)
+      request("sendMessage", chat_id: @group_id, message_thread_id: topic_id, text: text)
     end
 
     def create_topic(name)
-      request("createForumTopic", name: name).fetch("message_thread_id")
+      request("createForumTopic", chat_id: @group_id, name: name).fetch("message_thread_id")
     end
 
     def rename_topic(topic_id, name)
-      request("editForumTopic", message_thread_id: topic_id, name: name)
+      request("editForumTopic", chat_id: @group_id, message_thread_id: topic_id, name: name)
+    end
+
+    def set_webhook(url:, secret:)
+      request("setWebhook", url: url, secret_token: secret, allowed_updates: %w[message])
     end
 
     private
 
     def request(method, params)
       uri = URI("#{API_URL}/bot#{@token}/#{method}")
-      body = params.merge(chat_id: @group_id).to_json
-      reply = JSON.parse(@http.post(uri, body, "Content-Type" => "application/json").body)
+      reply = JSON.parse(@http.post(uri, params.to_json, "Content-Type" => "application/json").body)
       return reply["result"] if reply["ok"]
 
       raise ApiError.new("#{method}: #{reply["description"]}",

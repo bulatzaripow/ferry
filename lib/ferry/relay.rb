@@ -6,11 +6,14 @@ require_relative "api_error"
 module Ferry
   class Relay
     CHAT_TYPES = %w[dialog chat].freeze
+    PART = /.{1,3800}/m
 
-    def initialize(store:, telegram:, max:, logger: Logger.new($stdout))
+    def initialize(store:, telegram:, max:, owner_id:, group_id:, logger: Logger.new($stdout))
       @store = store
       @telegram = telegram
       @max = max
+      @owner_id = owner_id
+      @group_id = group_id
       @logger = logger
       @lock = Mutex.new
     end
@@ -19,29 +22,52 @@ module Ferry
       return unless update["update_type"] == "message_created"
 
       message = update["message"]
-      if (reason = skip_reason(message))
+      if (reason = max_skip_reason(message))
         @logger.info("max: message skipped (#{reason})")
         return
       end
 
-      @lock.synchronize do
-        chat = @store.enqueue(
-          max_chat_id: message.dig("recipient", "chat_id"),
-          direction: "max_to_tg",
-          source_id: message.dig("body", "mid"),
-          payload: {
-            author: author_name(message["sender"]),
-            text: message.dig("body", "text"),
-            chat_type: message.dig("recipient", "chat_type")
-          }
-        )
-        drain(chat["id"], "max_to_tg")
+      author = author_name(message["sender"])
+      chat_type = message.dig("recipient", "chat_type")
+      items = split(message.dig("body", "mid"), message.dig("body", "text")) do |part|
+        { author: author, text: part, chat_type: chat_type }
       end
+
+      enqueue_and_drain(message.dig("recipient", "chat_id"), "max_to_tg", items)
+    end
+
+    def handle_telegram_update(update)
+      message = update["message"]
+      return unless message
+
+      if (reason = telegram_skip_reason(message))
+        @logger.info("telegram: message skipped (#{reason})")
+        return
+      end
+
+      unless (chat = @store.chat_by_topic(message["message_thread_id"]))
+        @logger.info("telegram: message skipped (unknown topic #{message["message_thread_id"]})")
+        return
+      end
+
+      items = split(message["message_id"], message["text"]) { |part| { text: part } }
+      enqueue_and_drain(chat["max_chat_id"], "tg_to_max", items)
     end
 
     private
 
-    def skip_reason(message)
+    def enqueue_and_drain(max_chat_id, direction, items)
+      @lock.synchronize do
+        chat = @store.enqueue(max_chat_id: max_chat_id, direction: direction, items: items)
+        drain(chat["id"], direction)
+      end
+    end
+
+    def split(source_id, text)
+      text.scan(PART).each_with_index.map { |part, i| ["#{source_id}:#{i}", yield(part)] }
+    end
+
+    def max_skip_reason(message)
       sender = message["sender"]
 
       case
@@ -49,6 +75,14 @@ module Ferry
       when message.dig("recipient", "chat_id").nil? then "no chat id"
       when sender.nil? || sender["is_bot"] then "sent by a bot or a channel"
       when message.dig("body", "text").to_s.empty? then "no text"
+      end
+    end
+
+    def telegram_skip_reason(message)
+      case
+      when message.dig("from", "id") != @owner_id || message.dig("chat", "id") != @group_id then "not from the owner in the group"
+      when message["message_thread_id"].nil? then "not in a topic"
+      when message["text"].to_s.empty? then "no text"
       end
     end
 
@@ -71,6 +105,14 @@ module Ferry
     def deliver(row)
       chat = @store.chat(row["chat_id"])
       payload = JSON.parse(row["payload"])
+
+      case row["direction"]
+      when "max_to_tg" then deliver_to_telegram(chat, payload)
+      when "tg_to_max" then @max.send_message(chat_id: chat["max_chat_id"], text: payload["text"])
+      end
+    end
+
+    def deliver_to_telegram(chat, payload)
       topic_id = chat["tg_topic_id"] || create_topic(chat, payload)
 
       @telegram.send_message(topic_id: topic_id, text: "#{payload["author"]}: #{payload["text"]}")

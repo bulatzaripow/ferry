@@ -3,13 +3,25 @@ require "sinatra/base"
 
 module Ferry
   class App < Sinatra::Base
+    helpers do
+      def check_secret(header, expected)
+        halt 401 unless Rack::Utils.secure_compare(request.env[header].to_s, expected)
+      end
+    end
+
     get("/health") { "ok" }
 
     post "/max" do
-      secret = request.env["HTTP_X_MAX_BOT_API_SECRET"].to_s
-      halt 401 unless Rack::Utils.secure_compare(secret, settings.config.max_webhook_secret)
+      check_secret("HTTP_X_MAX_BOT_API_SECRET", settings.config.max_webhook_secret)
 
       settings.relay.handle_max_update(JSON.parse(request.body.read))
+      "ok"
+    end
+
+    post "/telegram" do
+      check_secret("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", settings.config.tg_webhook_secret)
+
+      settings.relay.handle_telegram_update(JSON.parse(request.body.read))
       "ok"
     end
   end

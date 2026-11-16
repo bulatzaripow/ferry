@@ -46,6 +46,16 @@ class TelegramTest < Minitest::Test
     assert_equal({ "chat_id" => -100, "message_thread_id" => 55, "name" => "Новое имя" }, http.requests.first[:body])
   end
 
+  def test_set_webhook
+    http = FakeHTTP.new(ok(true))
+
+    telegram(http).set_webhook(url: "https://example.com/telegram", secret: "s3cret")
+
+    assert_equal "https://api.telegram.org/bottoken/setWebhook", http.requests.first[:url]
+    assert_equal({ "url" => "https://example.com/telegram", "secret_token" => "s3cret",
+                   "allowed_updates" => ["message"] }, http.requests.first[:body])
+  end
+
   def test_rate_limit_is_retryable_and_has_retry_after
     http = FakeHTTP.new(failure(429, "Too Many Requests: retry after 5", retry_after: 5))
 

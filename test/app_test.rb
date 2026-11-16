@@ -20,6 +20,7 @@ class AppTest < Minitest::Test
     "TELEGRAM_BOT_TOKEN" => "tg-token",
     "MAX_BOT_TOKEN"      => "max-token",
     "MAX_WEBHOOK_SECRET" => "s3cret-value",
+    "TELEGRAM_WEBHOOK_SECRET" => "other_secret-1",
     "TELEGRAM_GROUP_ID"  => "-100",
     "TELEGRAM_OWNER_ID"  => "42"
   }.freeze
@@ -43,7 +44,7 @@ class AppTest < Minitest::Test
     post "/max", { update_type: "message_created" }.to_json, "HTTP_X_MAX_BOT_API_SECRET" => "s3cret-value"
 
     assert last_response.ok?
-    assert_equal [{ "update_type" => "message_created" }], @relay.updates
+    assert_equal [[:max, { "update_type" => "message_created" }]], @relay.updates
   end
 
   def test_max_webhook_rejects_wrong_secret
@@ -55,6 +56,20 @@ class AppTest < Minitest::Test
 
   def test_max_webhook_rejects_missing_secret
     post "/max", "{}"
+
+    assert_equal 401, last_response.status
+    assert_empty @relay.updates
+  end
+
+  def test_telegram_webhook_passes_update_to_relay
+    post "/telegram", { message: { text: "hi" } }.to_json, "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "other_secret-1"
+
+    assert last_response.ok?
+    assert_equal [[:telegram, { "message" => { "text" => "hi" } }]], @relay.updates
+  end
+
+  def test_telegram_webhook_rejects_wrong_secret
+    post "/telegram", "{}", "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "s3cret-value"
 
     assert_equal 401, last_response.status
     assert_empty @relay.updates

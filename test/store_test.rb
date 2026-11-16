@@ -35,6 +35,34 @@ class StoreTest < Minitest::Test
     assert_equal "m2", @store.next_in_queue(chat["id"], "max_to_tg")["source_id"]
   end
 
+  def test_enqueue_several_items_keeps_their_order
+    chat = enqueue("m1:0", "m1:1", "m1:2")
+
+    ids = []
+    while (row = @store.next_in_queue(chat["id"], "max_to_tg"))
+      ids << row["source_id"]
+      @store.delete(row["id"])
+    end
+
+    assert_equal %w[m1:0 m1:1 m1:2], ids
+  end
+
+  def test_directions_have_separate_queues
+    chat = enqueue("m1")
+    enqueue("m1", direction: "tg_to_max")
+
+    assert_equal "max_to_tg", @store.next_in_queue(chat["id"], "max_to_tg")["direction"]
+    assert_equal "tg_to_max", @store.next_in_queue(chat["id"], "tg_to_max")["direction"]
+  end
+
+  def test_chat_by_topic
+    chat = enqueue("m1")
+    @store.set_topic(chat["id"], 55, "Семья")
+
+    assert_equal chat["id"], @store.chat_by_topic(55)["id"]
+    assert_nil @store.chat_by_topic(56)
+  end
+
   def test_payload_is_stored_as_json
     chat = enqueue("m1")
 
@@ -66,8 +94,8 @@ class StoreTest < Minitest::Test
 
   private
 
-  def enqueue(source_id)
-    @store.enqueue(max_chat_id: -77, direction: "max_to_tg", source_id: source_id,
-                   payload: { author: "Иван", text: "привет" })
+  def enqueue(*source_ids, direction: "max_to_tg")
+    @store.enqueue(max_chat_id: -77, direction: direction,
+                   items: source_ids.map { [_1, { author: "Иван", text: "привет" }] })
   end
 end

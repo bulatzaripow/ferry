@@ -6,6 +6,7 @@ class ConfigTest < Minitest::Test
     "TELEGRAM_BOT_TOKEN" => "tg-token",
     "MAX_BOT_TOKEN"      => "max-token",
     "MAX_WEBHOOK_SECRET" => "s3cret-value",
+    "TELEGRAM_WEBHOOK_SECRET" => "other_secret-1",
     "TELEGRAM_GROUP_ID"  => "-1001234567890",
     "TELEGRAM_OWNER_ID"  => "42"
   }.freeze
@@ -27,6 +28,14 @@ class ConfigTest < Minitest::Test
 
   def test_non_numeric_id_raises
     assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge("TELEGRAM_OWNER_ID" => "abc")) }
+  end
+
+  def test_invalid_webhook_secret_raises
+    ["abc", "with space", "кириллица-секрет"].each do |secret|
+      %w[MAX_WEBHOOK_SECRET TELEGRAM_WEBHOOK_SECRET].each do |name|
+        assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge(name => secret)) }
+      end
+    end
   end
 
   def test_invalid_webhook_secret_raises
