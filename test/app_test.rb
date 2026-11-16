@@ -13,7 +13,9 @@ class AppTest < Minitest::Test
       @updates = []
     end
 
-    def handle_max_update(update) = @updates << update
+    def handle_max_update(update) = @updates << [:max, update]
+
+    def handle_telegram_update(update) = @updates << [:telegram, update]
   end
 
   ENV_OK = {
@@ -28,6 +30,7 @@ class AppTest < Minitest::Test
   def setup
     @relay = FakeRelay.new
     Ferry::App.set :config, Ferry::Config.from_env(ENV_OK)
+    Ferry::App.set :host_authorization, permitted_hosts: ["example.org"]
     Ferry::App.set :relay, @relay
   end
 
@@ -41,10 +44,24 @@ class AppTest < Minitest::Test
   end
 
   def test_max_webhook_passes_update_to_relay
-    post "/max", { update_type: "message_created" }.to_json, "HTTP_X_MAX_BOT_API_SECRET" => "s3cret-value"
-
+    post "/max", { update_type: "message_created" }.to_json, "HTTP_X_MAX_BOT_API_SECRET" => "s3cret-value", "CONTENT_TYPE" => "application/json"
+    
     assert last_response.ok?
     assert_equal [[:max, { "update_type" => "message_created" }]], @relay.updates
+  end
+
+  def test_telegram_webhook_passes_update_to_relay
+    post "/telegram", { message: { text: "hi" } }.to_json, "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "other_secret-1", "CONTENT_TYPE" => "application/json"
+
+    assert last_response.ok?
+    assert_equal [[:telegram, { "message" => { "text" => "hi" } }]], @relay.updates
+  end
+
+  def test_telegram_webhook_rejects_wrong_secret
+    post "/telegram", "{}", "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "s3cret-value"
+
+    assert_equal 401, last_response.status
+    assert_empty @relay.updates
   end
 
   def test_max_webhook_rejects_wrong_secret
@@ -56,20 +73,6 @@ class AppTest < Minitest::Test
 
   def test_max_webhook_rejects_missing_secret
     post "/max", "{}"
-
-    assert_equal 401, last_response.status
-    assert_empty @relay.updates
-  end
-
-  def test_telegram_webhook_passes_update_to_relay
-    post "/telegram", { message: { text: "hi" } }.to_json, "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "other_secret-1"
-
-    assert last_response.ok?
-    assert_equal [[:telegram, { "message" => { "text" => "hi" } }]], @relay.updates
-  end
-
-  def test_telegram_webhook_rejects_wrong_secret
-    post "/telegram", "{}", "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN" => "s3cret-value"
 
     assert_equal 401, last_response.status
     assert_empty @relay.updates

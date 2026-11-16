@@ -1,53 +1,11 @@
 require_relative "test_helper"
 require_relative "fake_store"
+require_relative "fakes"
 require "logger"
+require "ferry/courier"
 require "ferry/worker"
 
 class WorkerTest < Minitest::Test
-  class FakeTelegram
-    attr_reader :sent, :topics
-
-    def initialize(failures: 0, error: Ferry::ApiError.new("telegram is down"), gone_topics: [])
-      @failures = failures
-      @error = error
-      @gone_topics = gone_topics
-      @sent = []
-      @topics = []
-    end
-
-    def create_topic(name)
-      @topics << name
-      100 + @topics.size
-    end
-
-    def send_message(topic_id:, text:)
-      raise Ferry::ApiError.new("sendMessage: Bad Request: message thread not found", code: 400) if @gone_topics.include?(topic_id)
-
-      if @failures.positive?
-        @failures -= 1
-        raise @error
-      end
-      @sent << [topic_id, text]
-    end
-  end
-
-  class FakeMax
-    attr_reader :sent
-
-    def initialize(down_chats: [])
-      @down_chats = down_chats
-      @sent = []
-    end
-
-    def get_chat(_chat_id) = { "title" => "Family" }
-
-    def send_message(chat_id:, text:)
-      raise Ferry::ApiError, "max is down" if @down_chats.include?(chat_id)
-
-      @sent << [chat_id, text]
-    end
-  end
-
   def setup
     @store = FakeStore.new
     @telegram = FakeTelegram.new
@@ -79,11 +37,11 @@ class WorkerTest < Minitest::Test
   end
 
   def test_telegram_message_goes_to_max
-    queue_for_max("answer", id: "1:0")
+    queue_for_max("reply", id: "1:0")
 
     worker.tick
 
-    assert_equal [[-77, "answer"]], @max.sent
+    assert_equal [[-77, "reply"]], @max.sent
     assert_equal 0, @store.pending
   end
 
@@ -95,7 +53,7 @@ class WorkerTest < Minitest::Test
     assert_equal 1, @store.pending
   end
 
-  # ---- повторы
+  # ---- retries
 
   def test_failure_keeps_message_and_retries_with_growing_pause
     @telegram = FakeTelegram.new(failures: 3)
@@ -105,7 +63,7 @@ class WorkerTest < Minitest::Test
     worker.tick
     assert_equal [1, 1001, "telegram is down"], row_state
 
-    assert_equal 0, worker.tick
+    assert_equal 0, worker.tick # not due yet
 
     @now = 1001
     worker.tick
@@ -174,7 +132,7 @@ class WorkerTest < Minitest::Test
 
   def test_directions_are_independent
     @max = FakeMax.new(down_chats: [-77])
-    queue_for_max("answer", id: "1:0")
+    queue_for_max("reply", id: "1:0")
     queue_for_telegram("hello", id: "m1")
 
     worker.tick
@@ -230,9 +188,9 @@ class WorkerTest < Minitest::Test
   # ---- background thread
 
   def test_background_thread_delivers_after_wake
-    worker = Ferry::Worker.new(store: @store, telegram: @telegram, max: @max, logger: Logger.new(nil))
+    worker = build_worker(clock: nil)
     worker.start
-    sleep 0.05 # thread go to sleep, there is nothing to do
+    sleep 0.05 # the thread goes to sleep: nothing to do
 
     queue_for_telegram("hello")
     worker.wake
@@ -247,8 +205,14 @@ class WorkerTest < Minitest::Test
 
   private
 
-  def worker = Ferry::Worker.new(store: @store, telegram: @telegram, max: @max,
-                                 logger: Logger.new(nil), clock: -> { @now })
+  def worker = build_worker(clock: -> { @now })
+
+  def build_worker(clock:)
+    courier = Ferry::Courier.new(store: @store, telegram: @telegram, max: @max, logger: Logger.new(nil))
+    options = { store: @store, courier: courier, logger: Logger.new(nil) }
+    options[:clock] = clock if clock
+    Ferry::Worker.new(**options)
+  end
 
   def row_state
     row = @store.rows.first

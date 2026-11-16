@@ -1,5 +1,6 @@
 require "json"
 
+# In-memory copy of Ferry::Store. The same scenarios run against real SQLite in store_test.
 class FakeStore
   def initialize
     @chats = {}
@@ -38,6 +39,7 @@ class FakeStore
     row.merge!("attempts" => row["attempts"] + 1, "last_error" => message, "next_attempt_at" => retry_at)
   end
 
+  # --- helpers for assertions in tests
   def rows = @outbox
 
   def pending(direction = nil) = @outbox.count { direction.nil? || _1["direction"] == direction }

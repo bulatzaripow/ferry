@@ -26,21 +26,15 @@ class ConfigTest < Minitest::Test
     assert_raises(KeyError) { Ferry::Config.from_env(ENV_OK.except("MAX_BOT_TOKEN")) }
   end
 
-  def test_non_numeric_id_raises
-    assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge("TELEGRAM_OWNER_ID" => "abc")) }
-  end
-
   def test_invalid_webhook_secret_raises
-    ["abc", "with space", "кириллица-секрет"].each do |secret|
+    ["abc", "with space", "bad!secret"].each do |secret|
       %w[MAX_WEBHOOK_SECRET TELEGRAM_WEBHOOK_SECRET].each do |name|
         assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge(name => secret)) }
       end
     end
   end
 
-  def test_invalid_webhook_secret_raises
-    ["abc", "with space", "кириллица-секрет"].each do |secret|
-      assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge("MAX_WEBHOOK_SECRET" => secret)) }
-    end
+  def test_non_numeric_id_raises
+    assert_raises(ArgumentError) { Ferry::Config.from_env(ENV_OK.merge("TELEGRAM_OWNER_ID" => "abc")) }
   end
 end

@@ -2,6 +2,7 @@ require "json"
 
 module Ferry
   class Store
+    # The oldest message of every queue (chat + direction)
     HEADS = "o.id = (SELECT MIN(id) FROM outbox WHERE chat_id = o.chat_id AND direction = o.direction)".freeze
 
     def initialize(db)
