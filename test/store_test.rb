@@ -3,6 +3,8 @@ require "ferry/db"
 require "ferry/store"
 
 class StoreTest < Minitest::Test
+  FAR = 2**62
+
   def setup
     @store = Ferry::Store.new(Ferry::DB.connect(":memory:"))
   end
@@ -19,27 +21,16 @@ class StoreTest < Minitest::Test
     chat = enqueue("m1")
     enqueue("m1")
 
-    assert_equal "m1", @store.next_in_queue(chat["id"], "max_to_tg")["source_id"]
-    @store.delete(@store.next_in_queue(chat["id"], "max_to_tg")["id"])
-    assert_nil @store.next_in_queue(chat["id"], "max_to_tg")
-  end
+    @store.delete(head(chat)["id"])
 
-  def test_queue_is_returned_oldest_first
-    chat = enqueue("m1")
-    enqueue("m2")
-
-    assert_equal "m1", @store.next_in_queue(chat["id"], "max_to_tg")["source_id"]
-
-    @store.delete(@store.next_in_queue(chat["id"], "max_to_tg")["id"])
-
-    assert_equal "m2", @store.next_in_queue(chat["id"], "max_to_tg")["source_id"]
+    assert_nil head(chat)
   end
 
   def test_enqueue_several_items_keeps_their_order
     chat = enqueue("m1:0", "m1:1", "m1:2")
 
     ids = []
-    while (row = @store.next_in_queue(chat["id"], "max_to_tg"))
+    while (row = head(chat))
       ids << row["source_id"]
       @store.delete(row["id"])
     end
@@ -47,55 +38,83 @@ class StoreTest < Minitest::Test
     assert_equal %w[m1:0 m1:1 m1:2], ids
   end
 
+  def test_due_returns_only_the_oldest_message_of_each_queue
+    enqueue("m1", "m2")
+    enqueue("t1", direction: "tg_to_max")
+    enqueue("x1", chat: -78)
+
+    assert_equal %w[m1 t1 x1], @store.due(FAR).map { _1["source_id"] }
+  end
+
+  def test_due_skips_queue_whose_oldest_message_is_waiting
+    chat = enqueue("m1", "m2")
+    @store.record_failure(head(chat)["id"], "boom", 100)
+
+    assert_empty @store.due(99)
+    assert_equal ["m1"], @store.due(100).map { _1["source_id"] }
+  end
+
+  def test_next_due_at
+    assert_nil @store.next_due_at
+
+    chat = enqueue("m1")
+    @store.record_failure(head(chat)["id"], "boom", 100)
+
+    assert_equal 100, @store.next_due_at
+
+    enqueue("x1", chat: -78)
+
+    assert_equal 0, @store.next_due_at
+  end
+
+  def test_record_failure_counts_attempts_and_saves_error
+    chat = enqueue("m1")
+    row = head(chat)
+
+    @store.record_failure(row["id"], "boom", 10)
+    @store.record_failure(row["id"], "boom again", 20)
+
+    row = head(chat)
+    assert_equal 2, row["attempts"]
+    assert_equal "boom again", row["last_error"]
+    assert_equal 20, row["next_attempt_at"]
+  end
+
   def test_directions_have_separate_queues
     chat = enqueue("m1")
     enqueue("m1", direction: "tg_to_max")
 
-    assert_equal "max_to_tg", @store.next_in_queue(chat["id"], "max_to_tg")["direction"]
-    assert_equal "tg_to_max", @store.next_in_queue(chat["id"], "tg_to_max")["direction"]
+    assert_equal "max_to_tg", head(chat)["direction"]
+    assert_equal "tg_to_max", head(chat, "tg_to_max")["direction"]
   end
 
-  def test_chat_by_topic
+  def test_chat_by_topic_and_clear_topic
     chat = enqueue("m1")
-    @store.set_topic(chat["id"], 55, "Семья")
+    @store.set_topic(chat["id"], 55, "Family")
 
     assert_equal chat["id"], @store.chat_by_topic(55)["id"]
+    assert_equal "Family", @store.chat(chat["id"])["title"]
     assert_nil @store.chat_by_topic(56)
+
+    @store.clear_topic(chat["id"])
+
+    assert_nil @store.chat_by_topic(55)
   end
 
   def test_payload_is_stored_as_json
     chat = enqueue("m1")
 
-    payload = JSON.parse(@store.next_in_queue(chat["id"], "max_to_tg")["payload"])
-
-    assert_equal({ "author" => "Иван", "text" => "привет" }, payload)
-  end
-
-  def test_set_topic
-    chat = enqueue("m1")
-
-    @store.set_topic(chat["id"], 55, "Семья")
-
-    assert_equal 55, @store.chat(chat["id"])["tg_topic_id"]
-    assert_equal "Семья", @store.chat(chat["id"])["title"]
-  end
-
-  def test_record_failure_counts_attempts
-    chat = enqueue("m1")
-    row = @store.next_in_queue(chat["id"], "max_to_tg")
-
-    @store.record_failure(row["id"], "boom")
-    @store.record_failure(row["id"], "boom again")
-
-    row = @store.next_in_queue(chat["id"], "max_to_tg")
-    assert_equal 2, row["attempts"]
-    assert_equal "boom again", row["last_error"]
+    assert_equal({ "author" => "Ivan", "text" => "hello" }, JSON.parse(head(chat)["payload"]))
   end
 
   private
 
-  def enqueue(*source_ids, direction: "max_to_tg")
-    @store.enqueue(max_chat_id: -77, direction: direction,
-                   items: source_ids.map { [_1, { author: "Иван", text: "привет" }] })
+  def enqueue(*source_ids, direction: "max_to_tg", chat: -77)
+    @store.enqueue(max_chat_id: chat, direction: direction,
+                   items: source_ids.map { [_1, { author: "Ivan", text: "hello" }] })
+  end
+
+  def head(chat, direction = "max_to_tg")
+    @store.due(FAR).find { _1["chat_id"] == chat["id"] && _1["direction"] == direction }
   end
 end

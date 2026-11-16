@@ -1,21 +1,16 @@
-require "json"
 require "logger"
-
-require_relative "api_error"
 
 module Ferry
   class Relay
     CHAT_TYPES = %w[dialog chat].freeze
-    PART = /.{1,3800}/m
+    PART = /.{1,3800}/m # max message chunk for max and telegram
 
-    def initialize(store:, telegram:, max:, owner_id:, group_id:, logger: Logger.new($stdout))
+    def initialize(store:, worker:, owner_id:, group_id:, logger: Logger.new($stdout))
       @store = store
-      @telegram = telegram
-      @max = max
+      @worker = worker
       @owner_id = owner_id
       @group_id = group_id
       @logger = logger
-      @lock = Mutex.new
     end
 
     def handle_max_update(update)
@@ -33,7 +28,7 @@ module Ferry
         { author: author, text: part, chat_type: chat_type }
       end
 
-      enqueue_and_drain(message.dig("recipient", "chat_id"), "max_to_tg", items)
+      queue(message.dig("recipient", "chat_id"), "max_to_tg", items)
     end
 
     def handle_telegram_update(update)
@@ -51,16 +46,15 @@ module Ferry
       end
 
       items = split(message["message_id"], message["text"]) { |part| { text: part } }
-      enqueue_and_drain(chat["max_chat_id"], "tg_to_max", items)
+      queue(chat["max_chat_id"], "tg_to_max", items)
     end
 
     private
 
-    def enqueue_and_drain(max_chat_id, direction, items)
-      @lock.synchronize do
-        chat = @store.enqueue(max_chat_id: max_chat_id, direction: direction, items: items)
-        drain(chat["id"], direction)
-      end
+    def queue(max_chat_id, direction, items)
+      @store.enqueue(max_chat_id: max_chat_id, direction: direction, items: items)
+      @logger.info("#{direction}: queued #{items.map(&:first).join(", ")}")
+      @worker.wake
     end
 
     def split(source_id, text)
@@ -89,43 +83,6 @@ module Ferry
     def author_name(sender)
       name = sender.values_at("first_name", "last_name").join(" ").strip
       name.empty? ? (sender["username"] || "id#{sender["user_id"]}") : name
-    end
-
-    def drain(chat_id, direction)
-      while (row = @store.next_in_queue(chat_id, direction))
-        deliver(row)
-        @store.delete(row["id"])
-        @logger.info("#{direction}: delivered #{row["source_id"]}")
-      end
-    rescue ApiError => e
-      @store.record_failure(row["id"], e.message)
-      @logger.warn("#{direction}: #{row["source_id"]} not delivered, stays in queue (#{e.message})")
-    end
-
-    def deliver(row)
-      chat = @store.chat(row["chat_id"])
-      payload = JSON.parse(row["payload"])
-
-      case row["direction"]
-      when "max_to_tg" then deliver_to_telegram(chat, payload)
-      when "tg_to_max" then @max.send_message(chat_id: chat["max_chat_id"], text: payload["text"])
-      end
-    end
-
-    def deliver_to_telegram(chat, payload)
-      topic_id = chat["tg_topic_id"] || create_topic(chat, payload)
-
-      @telegram.send_message(topic_id: topic_id, text: "#{payload["author"]}: #{payload["text"]}")
-    end
-
-    def create_topic(chat, payload)
-      name = payload["chat_type"] == "dialog" ? payload["author"] : @max.get_chat(chat["max_chat_id"])["title"]
-      name = "Max #{chat["max_chat_id"]}" if name.to_s.strip.empty?
-      name = name[0, 128]
-
-      topic_id = @telegram.create_topic(name)
-      @store.set_topic(chat["id"], topic_id, name)
-      topic_id
     end
   end
 end

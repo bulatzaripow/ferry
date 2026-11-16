@@ -1,0 +1,50 @@
+require "json"
+
+class FakeStore
+  def initialize
+    @chats = {}
+    @outbox = []
+    @last_id = 0
+  end
+
+  def enqueue(max_chat_id:, direction:, items:)
+    chat = (@chats[max_chat_id] ||= { "id" => @chats.size + 1, "max_chat_id" => max_chat_id, "tg_topic_id" => nil })
+    items.each do |source_id, payload|
+      next if @outbox.any? { _1["direction"] == direction && _1["source_id"] == source_id }
+
+      @outbox << { "id" => (@last_id += 1), "chat_id" => chat["id"], "direction" => direction,
+                   "source_id" => source_id, "payload" => payload.to_json,
+                   "attempts" => 0, "next_attempt_at" => 0, "last_error" => nil }
+    end
+    chat
+  end
+
+  def chat(id) = @chats.values.find { _1["id"] == id }
+
+  def chat_by_topic(topic_id) = @chats.values.find { _1["tg_topic_id"] == topic_id }
+
+  def set_topic(chat_id, topic_id, _title) = chat(chat_id)["tg_topic_id"] = topic_id
+
+  def clear_topic(chat_id) = chat(chat_id)["tg_topic_id"] = nil
+
+  def due(now) = heads.select { _1["next_attempt_at"] <= now }
+
+  def next_due_at = heads.map { _1["next_attempt_at"] }.min
+
+  def delete(id) = @outbox.reject! { _1["id"] == id }
+
+  def record_failure(id, message, retry_at)
+    row = @outbox.find { _1["id"] == id }
+    row.merge!("attempts" => row["attempts"] + 1, "last_error" => message, "next_attempt_at" => retry_at)
+  end
+
+  def rows = @outbox
+
+  def pending(direction = nil) = @outbox.count { direction.nil? || _1["direction"] == direction }
+
+  private
+
+  def heads
+    @outbox.group_by { [_1["chat_id"], _1["direction"]] }.values.map { |rows| rows.min_by { _1["id"] } }.sort_by { _1["id"] }
+  end
+end
