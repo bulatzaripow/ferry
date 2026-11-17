@@ -1,0 +1,33 @@
+services:
+  ferry:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/ferry.db
+    volumes:
+      - ferry-data:/app/data
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "ruby", "-rnet/http", "-e", "Net::HTTP.get(URI('http://127.0.0.1:9292/health'))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - ferry
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  ferry-data:
+  caddy-data:

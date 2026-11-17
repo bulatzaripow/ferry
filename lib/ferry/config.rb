@@ -1,6 +1,6 @@
 module Ferry
   Config = Data.define(:tg_token, :tg_webhook_secret, :tg_group_id, :tg_owner_id,
-                       :max_token, :max_webhook_secret, :db_path, :certs_dir) do
+                       :max_token, :max_webhook_secret, :db_path, :certs_dir, :log_level) do
     def self.from_env(env = ENV)
       new(
         tg_token:           env.fetch("TELEGRAM_BOT_TOKEN"),
@@ -10,7 +10,8 @@ module Ferry
         max_token:          env.fetch("MAX_BOT_TOKEN"),
         max_webhook_secret: secret(env, "MAX_WEBHOOK_SECRET"),
         db_path:            env.fetch("DB_PATH", "data/ferry.db"),
-        certs_dir:          env.fetch("CERTS_DIR", "certs")
+        certs_dir:          env.fetch("CERTS_DIR", "certs"),
+        log_level:          env.fetch("LOG_LEVEL", "info")
       )
     end
 

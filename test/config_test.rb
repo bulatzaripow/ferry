@@ -20,6 +20,7 @@ class ConfigTest < Minitest::Test
     assert_equal 42, config.tg_owner_id
     assert_equal "data/ferry.db", config.db_path
     assert_equal "certs", config.certs_dir
+    assert_equal "info", config.log_level
   end
 
   def test_missing_variable_raises

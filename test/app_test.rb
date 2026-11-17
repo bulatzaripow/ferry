@@ -77,4 +77,11 @@ class AppTest < Minitest::Test
     assert_equal 401, last_response.status
     assert_empty @relay.updates
   end
+
+  def test_broken_json_gets_400_and_is_not_passed_to_relay
+    post "/max", "not json", "HTTP_X_MAX_BOT_API_SECRET" => "s3cret-value"
+
+    assert_equal 400, last_response.status
+    assert_empty @relay.updates
+  end
 end

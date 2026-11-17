@@ -1,0 +1,3 @@
+{$DOMAIN} {
+	reverse_proxy ferry:9292
+}
