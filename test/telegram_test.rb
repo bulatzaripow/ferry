@@ -10,7 +10,7 @@ class TelegramTest < Minitest::Test
 
     assert_equal({ "message_id" => 7 }, result)
     assert_equal "https://api.telegram.org/bottoken/sendMessage", http.requests.first.url
-    assert_equal({ "chat_id" => -100, "message_thread_id" => 12, "text" => "Ivan: hello" }, http.requests.first.json)
+    assert_equal({ "chat_id" => -100, "message_thread_id" => 12, "text" => "Ivan: hello", "parse_mode" => "HTML" }, http.requests.first.json)
   end
 
   def test_create_topic_returns_topic_id
@@ -39,6 +39,14 @@ class TelegramTest < Minitest::Test
                    "allowed_updates" => ["message"] }, http.requests.first.json)
   end
 
+  def test_reply_is_sent_as_reply_parameters
+    http = FakeHttp.new(ok({}))
+
+    telegram(http).send_message(topic_id: 12, text: "answer", reply_to: 77)
+
+    assert_equal({ "message_id" => 77, "allow_sending_without_reply" => true }, http.requests.first.json["reply_parameters"])
+  end
+
   # ---- files
 
   def test_send_photo_is_multipart_with_caption
@@ -52,6 +60,7 @@ class TelegramTest < Minitest::Test
     assert_match(/name="chat_id"\r\n\r\n-100\r\n/, request.wire)
     assert_match(/name="message_thread_id"\r\n\r\n12\r\n/, request.wire)
     assert_match(/name="caption"\r\n\r\nIvan: look\r\n/, request.wire)
+    assert_match(/name="parse_mode"\r\n\r\nHTML\r\n/, request.wire)
     assert_match(/name="photo"; filename="a.jpg"\r\n.*\r\n\r\nPHOTO-BYTES\r\n/m, request.wire)
   end
 
@@ -68,6 +77,14 @@ class TelegramTest < Minitest::Test
       assert_match(/name="#{field}"; filename="f.bin"/, http.requests.first.wire, kind)
       refute_match(/name="caption"/, http.requests.first.wire, kind)
     end
+  end
+
+  def test_reply_to_a_file_is_a_json_form_field
+    http = FakeHttp.new(ok({}))
+
+    telegram(http).send_media(topic_id: 1, kind: "file", io: StringIO.new("x"), filename: "r.pdf", reply_to: 77)
+
+    assert_match(/name="reply_parameters"\r\n\r\n\{"message_id":77,"allow_sending_without_reply":true\}\r\n/, http.requests.first.wire)
   end
 
   def test_video_is_sent_for_streaming

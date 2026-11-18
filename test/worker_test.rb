@@ -21,7 +21,7 @@ class WorkerTest < Minitest::Test
     assert_equal 1, worker.tick
 
     assert_equal ["Ivan"], @telegram.topics
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "hello"]], @telegram.sent
     assert_equal 0, @store.pending
   end
 
@@ -33,7 +33,7 @@ class WorkerTest < Minitest::Test
     2.times { worker.tick }
 
     assert_equal ["Family"], @telegram.topics
-    assert_equal [[101, "Ivan: one"], [101, "Ivan: two"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\none"], [101, "<b>Ivan</b>\ntwo"]], @telegram.sent
   end
 
   def test_telegram_message_goes_to_max
@@ -76,7 +76,7 @@ class WorkerTest < Minitest::Test
     @now = 1007
     worker.tick
     assert_equal 0, @store.pending
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\nhello"]], @telegram.sent
   end
 
   def test_pause_is_capped
@@ -116,7 +116,7 @@ class WorkerTest < Minitest::Test
     @now = 1001
     2.times { worker.tick }
 
-    assert_equal ["Ivan: one", "Ivan: two"], @telegram.sent.map(&:last)
+    assert_equal ["<b>Ivan</b>\none", "<b>Ivan</b>\ntwo"], @telegram.sent.map(&:last)
   end
 
   def test_failing_chat_does_not_block_other_chats
@@ -138,7 +138,7 @@ class WorkerTest < Minitest::Test
     worker.tick
 
     assert_equal 1, @store.pending("tg_to_max")
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\nhello"]], @telegram.sent
   end
 
   def test_unexpected_error_does_not_crash_worker
@@ -165,7 +165,7 @@ class WorkerTest < Minitest::Test
     worker.tick
 
     assert_equal ["Family"], @telegram.topics
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\nhello"]], @telegram.sent
     assert_equal 101, @store.chat(chat_id)["tg_topic_id"]
   end
 
@@ -198,7 +198,7 @@ class WorkerTest < Minitest::Test
     deadline = Time.now + 3
     sleep 0.01 until @telegram.sent.any? || Time.now > deadline
 
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\nhello"]], @telegram.sent
   ensure
     worker&.stop
   end

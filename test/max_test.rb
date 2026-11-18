@@ -25,6 +25,14 @@ class MaxTest < Minitest::Test
     assert_equal({ "attachments" => [{ "type" => "image", "payload" => { "token" => "T1" } }] }, http.requests.first.json)
   end
 
+  def test_reply_is_sent_as_link
+    http = FakeHttp.new(reply({}))
+
+    max(http).send_message(chat_id: 1, text: "answer", reply_to: "mid.42")
+
+    assert_equal({ "text" => "answer", "link" => { "type" => "reply", "mid" => "mid.42" } }, http.requests.first.json)
+  end
+
   def test_get_chat
     http = FakeHttp.new(reply(chat_id: -77, title: "Family"))
 

@@ -27,8 +27,9 @@ module Ferry
 
     def get_chat(chat_id) = call(Net::HTTP::Get, "/chats/#{chat_id}")
 
-    def send_message(chat_id:, text:, attachments: nil)
-      body = { text: text.to_s.empty? ? nil : text, attachments: attachments }.compact
+    def send_message(chat_id:, text:, attachments: nil, reply_to: nil)
+      body = { text: text.to_s.empty? ? nil : text, attachments: attachments,
+               link: reply_to && { type: "reply", mid: reply_to } }.compact
       call(Net::HTTP::Post, "/messages?chat_id=#{chat_id}", body)
     end
 

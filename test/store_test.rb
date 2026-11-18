@@ -107,6 +107,33 @@ class StoreTest < Minitest::Test
     assert_equal({ "author" => "Ivan", "text" => "hello" }, JSON.parse(head(chat)["payload"]))
   end
 
+  # ---- links between the two messengers (for replies)
+
+  def test_links_work_in_both_directions
+    @store.link("mid.1", 501)
+
+    assert_equal 501, @store.tg_message_id_for("mid.1")
+    assert_equal "mid.1", @store.max_mid_for(501)
+    assert_nil @store.tg_message_id_for("mid.2")
+    assert_nil @store.max_mid_for(502)
+  end
+
+  def test_first_link_wins_when_one_message_is_split_into_parts
+    @store.link("mid.1", 501)
+    @store.link("mid.1", 502)
+
+    assert_equal 501, @store.tg_message_id_for("mid.1")
+    assert_nil @store.max_mid_for(502)
+  end
+
+  def test_old_links_are_dropped
+    @store.link("mid.old", 501, 1000)
+    @store.link("mid.new", 502, 1000 + Ferry::Store::LINK_TTL + 1)
+
+    assert_nil @store.tg_message_id_for("mid.old")
+    assert_equal 502, @store.tg_message_id_for("mid.new")
+  end
+
   private
 
   def enqueue(*source_ids, direction: "max_to_tg", chat: -77)

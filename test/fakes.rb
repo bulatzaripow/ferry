@@ -2,7 +2,7 @@ require "ferry/api_error"
 
 # Stand-in messenger clients for the Courier and Worker tests
 class FakeTelegram
-  attr_reader :sent, :media, :topics
+  attr_reader :sent, :media, :topics, :replies
 
   def initialize(failures: 0, error: Ferry::ApiError.new("telegram is down"), gone_topics: [], files: {})
     @failures = failures
@@ -13,6 +13,8 @@ class FakeTelegram
     @media = []  # everything else: hashes with the attachment kind
     @topics = []
     @media_error = nil
+    @replies = []  # reply_to values of everything that was sent with one
+    @last_id = 1000
   end
 
   def fail_media_with(error) = @media_error = error
@@ -22,26 +24,30 @@ class FakeTelegram
     100 + @topics.size
   end
 
-  def send_message(topic_id:, text:)
+  def send_message(topic_id:, text:, reply_to: nil)
     guard(topic_id)
     @sent << [topic_id, text]
+    delivered(reply_to)
   end
 
-  def send_media(topic_id:, kind:, io:, filename:, caption:)
+  def send_media(topic_id:, kind:, io:, filename:, caption:, reply_to: nil)
     guard(topic_id)
     raise @media_error if @media_error
 
     @media << { kind: kind, topic_id: topic_id, filename: filename, caption: caption, content: io.read }
+    delivered(reply_to)
   end
 
-  def send_location(topic_id:, latitude:, longitude:)
+  def send_location(topic_id:, latitude:, longitude:, reply_to: nil)
     guard(topic_id)
     @media << { kind: "location", topic_id: topic_id, latitude: latitude, longitude: longitude }
+    delivered(reply_to)
   end
 
-  def send_contact(topic_id:, phone:, name:)
+  def send_contact(topic_id:, phone:, name:, reply_to: nil)
     guard(topic_id)
     @media << { kind: "contact", topic_id: topic_id, phone: phone, name: name }
+    delivered(reply_to)
   end
 
   def download(file_id, io)
@@ -52,6 +58,12 @@ class FakeTelegram
   end
 
   private
+
+  # What Telegram answers: the message with its id (1001, 1002, ...)
+  def delivered(reply_to)
+    @replies << reply_to if reply_to
+    { "message_id" => @last_id += 1 }
+  end
 
   def guard(topic_id)
     raise Ferry::ApiError.new("sendMessage: Bad Request: message thread not found", code: 400) if @gone_topics.include?(topic_id)
@@ -64,7 +76,7 @@ class FakeTelegram
 end
 
 class FakeMax
-  attr_reader :sent, :attachments, :uploads
+  attr_reader :sent, :attachments, :uploads, :replies
 
   def initialize(down_chats: [], files: {})
     @down_chats = down_chats
@@ -73,18 +85,22 @@ class FakeMax
     @attachments = []  # attachments, one entry per sent message
     @uploads = []
     @send_errors = []
+    @replies = []
   end
 
   def fail_next_send(error) = @send_errors << error
 
   def get_chat(_chat_id) = { "title" => "Family" }
 
-  def send_message(chat_id:, text:, attachments: nil)
+  # Answers like Max: the new message with its mid (X1, X2, ...)
+  def send_message(chat_id:, text:, attachments: nil, reply_to: nil)
     raise Ferry::ApiError, "max is down" if @down_chats.include?(chat_id)
     raise @send_errors.shift unless @send_errors.empty?
 
     @sent << [chat_id, text]
     @attachments << attachments
+    @replies << reply_to if reply_to
+    { "message" => { "body" => { "mid" => "X#{@sent.size}" } } }
   end
 
   def upload(kind, io, filename)

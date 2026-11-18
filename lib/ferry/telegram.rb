@@ -24,25 +24,26 @@ module Ferry
       @http = http
     end
 
-    def send_message(topic_id:, text:)
-      call("sendMessage", chat_id: @group_id, message_thread_id: topic_id, text: text)
+    # text and caption are HTML (the caller escapes user text); reply_to is a Telegram message id
+    def send_message(topic_id:, text:, reply_to: nil)
+      call("sendMessage", target(topic_id, reply_to).merge(text: text, parse_mode: "HTML"))
     end
 
-    def send_media(topic_id:, kind:, io:, filename:, caption: nil)
+    def send_media(topic_id:, kind:, io:, filename:, caption: nil, reply_to: nil)
       method, field = MEDIA.fetch(kind)
-      params = { chat_id: @group_id, message_thread_id: topic_id }
-      params[:caption] = caption unless caption.to_s.empty?
+      params = target(topic_id, reply_to)
+      params.merge!(caption: caption, parse_mode: "HTML") unless caption.to_s.empty?
       params[:supports_streaming] = true if kind == "video"
 
       upload(method, params, field => [io, filename])
     end
 
-    def send_location(topic_id:, latitude:, longitude:)
-      call("sendLocation", chat_id: @group_id, message_thread_id: topic_id, latitude: latitude, longitude: longitude)
+    def send_location(topic_id:, latitude:, longitude:, reply_to: nil)
+      call("sendLocation", target(topic_id, reply_to).merge(latitude: latitude, longitude: longitude))
     end
 
-    def send_contact(topic_id:, phone:, name:)
-      call("sendContact", chat_id: @group_id, message_thread_id: topic_id, phone_number: phone, first_name: name)
+    def send_contact(topic_id:, phone:, name:, reply_to: nil)
+      call("sendContact", target(topic_id, reply_to).merge(phone_number: phone, first_name: name))
     end
 
     def create_topic(name)
@@ -65,6 +66,12 @@ module Ferry
 
     private
 
+    def target(topic_id, reply_to)
+      params = { chat_id: @group_id, message_thread_id: topic_id }
+      params[:reply_parameters] = { message_id: reply_to, allow_sending_without_reply: true } if reply_to
+      params
+    end
+
     def call(method, params)
       req = Net::HTTP::Post.new(uri_for(method), "Content-Type" => "application/json")
       req.body = params.to_json
@@ -73,7 +80,7 @@ module Ferry
 
     def upload(method, params, files)
       req = Net::HTTP::Post.new(uri_for(method))
-      form = params.map { |name, value| [name.to_s, value.to_s] }
+      form = params.map { |name, value| [name.to_s, value.is_a?(Hash) ? value.to_json : value.to_s] }
       files.each { |field, (io, filename)| form << [field, io, { filename: filename, content_type: "application/octet-stream" }] }
       req.set_form(form, "multipart/form-data")
       parse(method, @http.request(req))

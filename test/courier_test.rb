@@ -19,14 +19,14 @@ class CourierTest < Minitest::Test
   def test_photo_with_text_is_sent_as_photo_with_caption
     deliver_from_max({ "text" => "look", "media" => { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg" } })
 
-    assert_equal [{ kind: "image", topic_id: 101, filename: "a.jpg", caption: "Ivan: look", content: "PHOTO" }], @telegram.media
+    assert_equal [{ kind: "image", topic_id: 101, filename: "a.jpg", caption: "<b>Ivan</b>\nlook", content: "PHOTO" }], @telegram.media
     assert_empty @telegram.sent
   end
 
   def test_attachment_without_text_gets_a_caption_with_the_author_only
     deliver_from_max({ "text" => "", "media" => { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg" } })
 
-    assert_equal "Ivan:", @telegram.media.first[:caption]
+    assert_equal "<b>Ivan</b>", @telegram.media.first[:caption]
   end
 
   def test_voice_message_is_sent_as_voice_not_as_a_document
@@ -52,7 +52,7 @@ class CourierTest < Minitest::Test
   def test_text_row_is_sent_as_plain_message
     deliver_from_max({ "text" => "hello" })
 
-    assert_equal [[101, "Ivan: hello"]], @telegram.sent
+    assert_equal [[101, "<b>Ivan</b>\nhello"]], @telegram.sent
   end
 
   def test_temp_files_are_removed
@@ -61,6 +61,71 @@ class CourierTest < Minitest::Test
     deliver_from_max({ "text" => "", "media" => { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg" } })
 
     assert_empty Dir[File.join(Dir.tmpdir, "ferry*")] - before
+  end
+
+  def test_signature_is_not_added_in_a_private_dialog
+    deliver_from_max({ "chat_type" => "dialog", "text" => "hello" })
+    deliver_from_max({ "chat_type" => "dialog", "text" => "", "media" => { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg" } }, id: "m2:0")
+
+    assert_equal [[101, "hello"]], @telegram.sent
+    assert_equal "", @telegram.media.first[:caption]
+  end
+
+  def test_user_text_cannot_break_the_html
+    deliver_from_max({ "author" => "A<B>", "text" => "1 < 2 & <b>x</b>" })
+
+    assert_equal [[101, "<b>A&lt;B&gt;</b>\n1 &lt; 2 &amp; &lt;b&gt;x&lt;/b&gt;"]], @telegram.sent
+  end
+
+  # ---- replies
+
+  def test_max_reply_becomes_a_telegram_reply_to_the_linked_message
+    @store.link("mid.question", 900)
+
+    deliver_from_max({ "text" => "answer", "reply_to" => "mid.question" })
+
+    assert_equal [900], @telegram.replies
+  end
+
+  def test_reply_to_an_unknown_message_is_sent_as_a_plain_message
+    deliver_from_max({ "text" => "answer", "reply_to" => "mid.forgotten" })
+
+    assert_equal 1, @telegram.sent.size
+    assert_empty @telegram.replies
+  end
+
+  def test_delivered_max_message_is_linked_to_its_telegram_copy
+    deliver_from_max({ "text" => "question", "mid" => "mid.1" })
+
+    assert_equal 1001, @store.tg_message_id_for("mid.1")
+  end
+
+  def test_attachments_are_linked_too
+    deliver_from_max({ "text" => "", "mid" => "mid.2", "media" => { "kind" => "location", "latitude" => 1, "longitude" => 2 } })
+
+    assert_equal 1001, @store.tg_message_id_for("mid.2")
+  end
+
+  def test_telegram_reply_becomes_a_max_reply_to_the_linked_message
+    @store.link("mid.question", 900)
+
+    deliver_from_telegram({ "text" => "answer", "reply_to" => 900 })
+
+    assert_equal ["mid.question"], @max.replies
+  end
+
+  def test_message_sent_to_max_is_linked_to_its_telegram_original
+    deliver_from_telegram({ "text" => "question" }, id: "77:0")
+
+    assert_equal "X1", @store.max_mid_for(77)
+  end
+
+  def test_a_reply_chain_works_across_both_messengers
+    deliver_from_max({ "text" => "question", "mid" => "mid.1" })           # becomes Telegram message 1001
+    deliver_from_telegram({ "text" => "answer", "reply_to" => 1001 }, id: "5:0") # owner replies to it
+
+    assert_equal ["mid.1"], @max.replies
+    assert_equal "X1", @store.max_mid_for(5)
   end
 
   # ---- Telegram -> Max
@@ -120,7 +185,7 @@ class CourierTest < Minitest::Test
 
     assert_empty @telegram.media
     text = @telegram.sent.first.last
-    assert_match(/\AIvan: look\n\[!\] Could not forward attachment \(photo\): sendPhoto: Bad Request: wrong file\z/, text)
+    assert_match(/\A<b>Ivan<\/b>\nlook\n\[!\] Could not forward attachment \(photo\): sendPhoto: Bad Request: wrong file\z/, text)
   end
 
   def test_expired_download_link_is_replaced_by_a_notice
@@ -129,7 +194,7 @@ class CourierTest < Minitest::Test
 
     deliver_from_max({ "text" => "", "media" => { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg", "label" => "photo" } })
 
-    assert_match(/\AIvan: \[!\] Could not forward attachment \(photo\): GET cdn.example: HTTP 404\z/, @telegram.sent.first.last)
+    assert_match(/\A<b>Ivan<\/b>\n\[!\] Could not forward attachment \(photo\): GET cdn.example: HTTP 404\z/, @telegram.sent.first.last)
   end
 
   def test_unforwardable_attachment_is_replaced_by_a_notice_to_max

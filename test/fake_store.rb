@@ -5,6 +5,7 @@ class FakeStore
   def initialize
     @chats = {}
     @outbox = []
+    @links = []
     @last_id = 0
   end
 
@@ -31,6 +32,14 @@ class FakeStore
   def due(now) = heads.select { _1["next_attempt_at"] <= now }
 
   def next_due_at = heads.map { _1["next_attempt_at"] }.min
+
+  def link(max_mid, tg_message_id, _now = nil)
+    @links << [max_mid, tg_message_id] unless @links.any? { _1.first == max_mid || _1.last == tg_message_id }
+  end
+
+  def tg_message_id_for(max_mid) = @links.find { _1.first == max_mid }&.last
+
+  def max_mid_for(tg_message_id) = @links.find { _1.last == tg_message_id }&.first
 
   def delete(id) = @outbox.reject! { _1["id"] == id }
 

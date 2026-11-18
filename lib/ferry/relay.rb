@@ -28,7 +28,9 @@ module Ferry
         return
       end
 
-      payloads = max_payloads(author_name(message["sender"]), message.dig("recipient", "chat_type"), text, medias)
+      payloads = max_payloads(author_name(message["sender"]), message.dig("recipient", "chat_type"), body["mid"], text, medias)
+      reply_to = message.dig("link", "message", "mid") if message.dig("link", "type") == "reply"
+      payloads.first["reply_to"] = reply_to if reply_to
       queue(message.dig("recipient", "chat_id"), "max_to_tg", body["mid"], payloads)
     end
 
@@ -51,6 +53,9 @@ module Ferry
       end
 
       payloads = media ? [{ "text" => text, "media" => media }] : text.scan(PART).map { { "text" => _1 } }
+      reply_to = message.dig("reply_to_message", "message_id")
+      # inside a topic every plain message "replies" to the service message that created the topic
+      payloads.first["reply_to"] = reply_to if reply_to && reply_to != message["message_thread_id"]
       queue(chat["max_chat_id"], "tg_to_max", message["message_id"], payloads)
     end
 
@@ -66,8 +71,8 @@ module Ferry
     # ---- Max -> Telegram
 
     # Queue rows: the caption goes with the first file that can have one; if it does not fit it is sent as separate text
-    def max_payloads(author, chat_type, text, medias)
-      base = { "author" => author, "chat_type" => chat_type }
+    def max_payloads(author, chat_type, mid, text, medias)
+      base = { "author" => author, "chat_type" => chat_type, "mid" => mid }
       payloads = []
 
       medias.each do |media|
@@ -75,7 +80,7 @@ module Ferry
           payloads.concat(text_payloads(base, text.empty? ? media["label"] : text))
           text = ""
           payloads << base.merge("text" => "", "media" => media)
-        elsif !text.empty? && "#{author}: #{text}".length <= CAPTION_LIMIT
+        elsif !text.empty? && "#{author}\n#{text}".length <= CAPTION_LIMIT
           payloads << base.merge("text" => text, "media" => media)
           text = ""
         else

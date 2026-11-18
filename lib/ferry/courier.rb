@@ -1,3 +1,4 @@
+require "cgi"
 require "json"
 require "logger"
 require "tempfile"
@@ -49,17 +50,28 @@ module Ferry
     def to_telegram(chat, payload)
       topic_id = chat["tg_topic_id"] || create_topic(chat, payload)
       media = payload["media"]
-      caption = "#{payload["author"]}: #{payload["text"]}".strip
+      text = html(payload)
+      reply_to = payload["reply_to"] && @store.tg_message_id_for(payload["reply_to"])
 
-      case media&.fetch("kind")
-      when nil        then @telegram.send_message(topic_id: topic_id, text: caption)
-      when "location" then @telegram.send_location(topic_id: topic_id, latitude: media["latitude"], longitude: media["longitude"])
-      when "contact"  then @telegram.send_contact(topic_id: topic_id, phone: media["phone"], name: media["name"])
-      else
-        with_file(media) do |io|
-          @telegram.send_media(topic_id: topic_id, kind: media["kind"], io: io, filename: filename(media), caption: caption)
-        end
-      end
+      sent = case media&.fetch("kind")
+             when nil        then @telegram.send_message(topic_id: topic_id, text: text, reply_to: reply_to)
+             when "location" then @telegram.send_location(topic_id: topic_id, latitude: media["latitude"], longitude: media["longitude"], reply_to: reply_to)
+             when "contact"  then @telegram.send_contact(topic_id: topic_id, phone: media["phone"], name: media["name"], reply_to: reply_to)
+             else
+               with_file(media) do |io|
+                 @telegram.send_media(topic_id: topic_id, kind: media["kind"], io: io, filename: filename(media), caption: text, reply_to: reply_to)
+               end
+             end
+
+      @store.link(payload["mid"], sent["message_id"]) if payload["mid"] && sent
+    end
+
+    # The author goes on its own bold line above the text. Private dialogs have one author, so no signature there.
+    def html(payload)
+      text = CGI.escapeHTML(payload["text"].to_s)
+      return text if payload["chat_type"] == "dialog"
+
+      ["<b>#{CGI.escapeHTML(payload["author"].to_s)}</b>", text].reject(&:empty?).join("\n")
     end
 
     def create_topic(chat, payload)
@@ -77,8 +89,12 @@ module Ferry
     def to_max(row, chat, payload)
       media = payload["media"]
       attachment = media && max_attachment(row, media)
+      reply_to = payload["reply_to"] && @store.max_mid_for(payload["reply_to"])
 
-      @max.send_message(chat_id: chat["max_chat_id"], text: payload["text"], attachments: attachment && [attachment])
+      sent = @max.send_message(chat_id: chat["max_chat_id"], text: payload["text"],
+                               attachments: attachment && [attachment], reply_to: reply_to)
+      mid = sent&.dig("message", "body", "mid")
+      @store.link(mid, row["source_id"].to_i) if mid # source_id is "<telegram message id>:<part>"
     end
 
     def max_attachment(row, media)

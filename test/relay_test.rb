@@ -27,13 +27,54 @@ class RelayTest < Minitest::Test
     @store.set_topic(chat["id"], 101, "Family")
   end
 
+  # ---- replies
+
+  def test_max_reply_remembers_the_replied_message
+    update = max_update(text: "answer")
+    update["message"]["link"] = { "type" => "reply", "message" => { "mid" => "mid.7", "text" => "question" } }
+
+    @relay.handle_max_update(update)
+
+    assert_equal "mid.7", payloads.first["reply_to"]
+  end
+
+  def test_max_forward_is_not_a_reply
+    update = max_update(text: "look")
+    update["message"]["link"] = { "type" => "forward", "message" => { "mid" => "mid.7" } }
+
+    @relay.handle_max_update(update)
+
+    refute payloads.first.key?("reply_to")
+  end
+
+  def test_only_the_first_part_of_a_long_message_carries_the_reply
+    update = max_update(text: "a" * 3900)
+    update["message"]["link"] = { "type" => "reply", "message" => { "mid" => "mid.7" } }
+
+    @relay.handle_max_update(update)
+
+    assert_equal ["mid.7", nil], payloads.map { _1["reply_to"] }
+  end
+
+  def test_telegram_reply_remembers_the_replied_message
+    @relay.handle_telegram_update(telegram_update(text: "answer", extra: { "reply_to_message" => { "message_id" => 55 } }))
+
+    assert_equal({ "text" => "answer", "reply_to" => 55 }, payloads.first)
+  end
+
+  def test_telegram_message_in_a_topic_is_not_a_reply_to_the_topic_itself
+    @relay.handle_telegram_update(telegram_update(text: "hi", topic: 101, extra: { "reply_to_message" => { "message_id" => 101 } }))
+
+    assert_equal({ "text" => "hi" }, payloads.first)
+  end
+
   # ---- Max -> Telegram: text
 
   def test_max_message_is_queued_with_author_and_worker_is_woken
     @relay.handle_max_update(max_update(text: "hello", chat_type: "dialog", chat_id: 5))
 
     assert_equal ["m1:0"], @store.rows.map { _1["source_id"] }
-    assert_equal({ "author" => "Ivan Petrov", "chat_type" => "dialog", "text" => "hello" }, payloads.first)
+    assert_equal({ "author" => "Ivan Petrov", "chat_type" => "dialog", "mid" => "m1", "text" => "hello" }, payloads.first)
     assert_equal "max_to_tg", @store.rows.first["direction"]
     assert_equal 1, @worker.wakes
   end
@@ -99,6 +140,13 @@ class RelayTest < Minitest::Test
 
     assert_equal ["", text], payloads.map { _1["text"] }
     assert_equal [true, false], payloads.map { _1.key?("media") }
+  end
+
+  def test_text_that_fits_a_caption_only_together_with_the_signature
+    text = "x" * 1020 # 1020 + the author line is more than 1024
+    @relay.handle_max_update(max_update(text: text, attachments: [image("https://cdn.example/a.jpg")]))
+
+    assert_equal ["", text], payloads.map { _1["text"] }
   end
 
   def test_max_attachment_kinds
