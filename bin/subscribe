@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+# Tells Telegram and Max where to send updates. Run it once after the first deploy:
+#   docker compose run --rm ferry bin/subscribe
+require_relative "../lib/ferry/config"
+require_relative "../lib/ferry/telegram"
+require_relative "../lib/ferry/max"
+
+config = Ferry::Config.from_env
+base = ENV.fetch("PUBLIC_URL").chomp("/")
+abort "PUBLIC_URL must start with https://" unless base.start_with?("https://")
+
+telegram = Ferry::Telegram.new(config.tg_token, config.tg_group_id)
+telegram.set_webhook(url: "#{base}/telegram", secret: config.tg_webhook_secret)
+puts "telegram: webhook set to #{base}/telegram"
+
+max = Ferry::Max.new(config.max_token, certs_dir: config.certs_dir)
+max.subscribe(url: "#{base}/max", secret: config.max_webhook_secret)
+puts "max: subscribed to #{base}/max"

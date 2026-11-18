@@ -1,0 +1,133 @@
+require "cgi"
+require "json"
+require "logger"
+require "tempfile"
+require "uri"
+
+require_relative "api_error"
+
+module Ferry
+  # Delivers one queued message: text, file, contact or location.
+  # ApiError is not swallowed here: retries are the Worker's job. The one exception is an attachment
+  # that can never be forwarded (too big, wrong format): a text notice is sent instead, so that the
+  # queue does not get stuck behind it.
+  class Courier
+    def initialize(store:, telegram:, max:, logger: Logger.new($stdout))
+      @store = store
+      @telegram = telegram
+      @max = max
+      @logger = logger
+      @uploaded = {} # row id => Max attachment that is already uploaded (a retry must not upload again)
+    end
+
+    def deliver(row)
+      chat = @store.chat(row["chat_id"])
+      payload = JSON.parse(row["payload"])
+
+      begin
+        send_row(row, chat, payload)
+      rescue ApiError => e
+        raise unless payload["media"] && e.permanent? && !e.topic_gone?
+
+        @logger.error("#{row["direction"]}: #{row["source_id"]} attachment can't be forwarded, sending a notice (#{e.message})")
+        send_notice(row, chat, payload, e)
+      end
+
+      @uploaded.delete(row["id"]) # on failure the entry stays in the cache until the retry
+    end
+
+    private
+
+    def send_row(row, chat, payload)
+      case row["direction"]
+      when "max_to_tg" then to_telegram(chat, payload)
+      when "tg_to_max" then to_max(row, chat, payload)
+      end
+    end
+
+    # ---- Max -> Telegram
+
+    def to_telegram(chat, payload)
+      topic_id = chat["tg_topic_id"] || create_topic(chat, payload)
+      media = payload["media"]
+      text = html(payload)
+      reply_to = payload["reply_to"] && @store.tg_message_id_for(payload["reply_to"])
+
+      sent = case media&.fetch("kind")
+             when nil        then @telegram.send_message(topic_id: topic_id, text: text, reply_to: reply_to)
+             when "location" then @telegram.send_location(topic_id: topic_id, latitude: media["latitude"], longitude: media["longitude"], reply_to: reply_to)
+             when "contact"  then @telegram.send_contact(topic_id: topic_id, phone: media["phone"], name: media["name"], reply_to: reply_to)
+             else
+               with_file(media) do |io|
+                 @telegram.send_media(topic_id: topic_id, kind: media["kind"], io: io, filename: filename(media), caption: text, reply_to: reply_to)
+               end
+             end
+
+      @store.link(payload["mid"], sent["message_id"]) if payload["mid"] && sent
+    end
+
+    # The author goes on its own bold line above the text. Private dialogs have one author, so no signature there.
+    def html(payload)
+      text = CGI.escapeHTML(payload["text"].to_s)
+      return text if payload["chat_type"] == "dialog"
+
+      ["<b>#{CGI.escapeHTML(payload["author"].to_s)}</b>", text].reject(&:empty?).join("\n")
+    end
+
+    def create_topic(chat, payload)
+      name = payload["chat_type"] == "dialog" ? payload["author"] : @max.get_chat(chat["max_chat_id"])["title"]
+      name = "Max #{chat["max_chat_id"]}" if name.to_s.strip.empty?
+      name = name[0, 128]
+
+      topic_id = @telegram.create_topic(name)
+      @store.set_topic(chat["id"], topic_id, name)
+      topic_id
+    end
+
+    # ---- Telegram -> Max
+
+    def to_max(row, chat, payload)
+      media = payload["media"]
+      attachment = media && max_attachment(row, media)
+      reply_to = payload["reply_to"] && @store.max_mid_for(payload["reply_to"])
+
+      sent = @max.send_message(chat_id: chat["max_chat_id"], text: payload["text"],
+                               attachments: attachment && [attachment], reply_to: reply_to)
+      mid = sent&.dig("message", "body", "mid")
+      @store.link(mid, row["source_id"].to_i) if mid # source_id is "<telegram message id>:<part>"
+    end
+
+    def max_attachment(row, media)
+      case media["kind"]
+      when "location" then { type: "location", latitude: media["latitude"], longitude: media["longitude"] }
+      when "contact"  then { type: "contact", payload: { name: media["name"], vcf_info: vcard(media) } }
+      else @uploaded[row["id"]] ||= with_file(media) { |io| @max.upload(media["kind"], io, filename(media)) }
+      end
+    end
+
+    def vcard(media)
+      "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:#{media["name"]}\r\nTEL;TYPE=CELL:#{media["phone"]}\r\nEND:VCARD"
+    end
+
+    # ---- shared
+
+    # Downloads the file into a temp file (deleted right after the block) and yields it
+    def with_file(media)
+      Tempfile.create("ferry", binmode: true) do |io|
+        media["url"] ? @max.download(media["url"], io) : @telegram.download(media["file_id"], io)
+        io.flush
+        io.rewind
+        yield io
+      end
+    end
+
+    def filename(media) = media["filename"] || File.basename(URI(media["url"].to_s).path).then { _1.empty? ? "file" : _1 }
+
+    def send_notice(row, chat, payload, error)
+      note = [payload["text"].to_s, "[!] Could not forward attachment (#{payload.dig("media", "label")}): #{error.message[0, 150]}"]
+             .reject(&:empty?).join("\n")
+
+      send_row(row, chat, payload.merge("text" => note, "media" => nil))
+    end
+  end
+end
