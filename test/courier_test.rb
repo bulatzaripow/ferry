@@ -128,6 +128,73 @@ class CourierTest < Minitest::Test
     assert_equal "X1", @store.max_mid_for(5)
   end
 
+  # ---- albums
+
+  ALBUM = { "kind" => "album", "label" => "album of 2 files", "items" => [
+    { "kind" => "image", "url" => "https://cdn.example/dir/a.jpg", "label" => "photo" },
+    { "kind" => "file", "url" => "https://cdn.example/dir/r.pdf", "filename" => "r.pdf", "label" => "file r.pdf" }
+  ] }.freeze
+
+  def test_album_from_max_is_sent_as_one_group_with_the_caption
+    deliver_from_max({ "text" => "look", "mid" => "mid.1", "media" => ALBUM })
+
+    album = @telegram.media.first
+    assert_equal 1, @telegram.media.size
+    assert_equal "<b>Ivan</b>\nlook", album[:caption]
+    assert_equal [%w[image a.jpg PHOTO], %w[file r.pdf PDF]], album[:items].map { _1.values_at(:kind, :filename, :content) }
+    assert_equal 1001, @store.tg_message_id_for("mid.1") # linked to the first message of the album
+  end
+
+  def test_album_with_a_bad_file_is_sent_file_by_file_with_a_notice_for_the_bad_one
+    @max = FakeMax.new(files: { "https://cdn.example/dir/a.jpg" => "PHOTO",
+                                "https://cdn.example/dir/r.pdf" => Ferry::ApiError.new("GET cdn.example: HTTP 404", code: 404) })
+    @courier = Ferry::Courier.new(store: @store, telegram: @telegram, max: @max, logger: Logger.new(nil))
+
+    deliver_from_max({ "text" => "look", "media" => ALBUM })
+
+    assert_equal ["image"], @telegram.media.map { _1[:kind] }
+    assert_equal "<b>Ivan</b>\nlook", @telegram.media.first[:caption]
+    assert_match(/\A<b>Ivan<\/b>\n\[!\] Could not forward attachment \(file r.pdf\): GET cdn.example: HTTP 404\z/, @telegram.sent.first.last)
+  end
+
+  def test_album_failing_for_a_retryable_reason_is_raised_not_split
+    @telegram.fail_media_with(Ferry::ApiError.new("sendMediaGroup: Bad Gateway", code: 502))
+
+    assert_raises(Ferry::ApiError) { deliver_from_max({ "text" => "", "media" => ALBUM }) }
+    assert_empty @telegram.sent
+  end
+
+  def test_album_from_telegram_becomes_one_max_message_with_several_attachments
+    @telegram = FakeTelegram.new(files: { "F1" => "ONE", "F2" => "TWO" })
+    @courier = Ferry::Courier.new(store: @store, telegram: @telegram, max: @max, logger: Logger.new(nil))
+    rows = [
+      queue("tg_to_max", { "text" => "", "media" => { "kind" => "image", "file_id" => "F1", "filename" => "photo.jpg" } }, id: "1:0", group: "A1"),
+      queue("tg_to_max", { "text" => "the trip", "media" => { "kind" => "image", "file_id" => "F2", "filename" => "photo.jpg" } }, id: "2:0", group: "A1")
+    ]
+
+    @courier.deliver(rows.first, rows)
+
+    assert_equal %w[ONE TWO], @max.uploads.map { _1[:content] }
+    assert_equal [[-77, "the trip"]], @max.sent
+    assert_equal [[{ type: "image", payload: { token: "T1" } }, { type: "image", payload: { token: "T2" } }]], @max.attachments
+    assert_equal "X1", @store.max_mid_for(1) # the first part of the album is linked
+  end
+
+  def test_files_of_a_telegram_album_are_not_uploaded_again_on_retry
+    @telegram = FakeTelegram.new(files: { "F1" => "ONE", "F2" => "TWO" })
+    @courier = Ferry::Courier.new(store: @store, telegram: @telegram, max: @max, logger: Logger.new(nil))
+    @max.fail_next_send(Ferry::ApiError.new("attachment.not.ready", code: 400, transient: true))
+    rows = [
+      queue("tg_to_max", { "text" => "", "media" => { "kind" => "image", "file_id" => "F1", "filename" => "a.jpg" } }, id: "1:0", group: "A1"),
+      queue("tg_to_max", { "text" => "", "media" => { "kind" => "image", "file_id" => "F2", "filename" => "b.jpg" } }, id: "2:0", group: "A1")
+    ]
+
+    assert_raises(Ferry::ApiError) { @courier.deliver(rows.first, rows) }
+    @courier.deliver(rows.first, rows)
+
+    assert_equal 2, @max.uploads.size
+  end
+
   # ---- Telegram -> Max
 
   def test_telegram_voice_is_uploaded_and_sent_to_max
@@ -249,8 +316,8 @@ class CourierTest < Minitest::Test
     @courier.deliver(queue("tg_to_max", payload, id: id))
   end
 
-  def queue(direction, payload, id: "m1:0")
-    chat = @store.enqueue(max_chat_id: -77, direction: direction, items: [[id, payload]])
+  def queue(direction, payload, id: "m1:0", group: nil)
+    chat = @store.enqueue(max_chat_id: -77, direction: direction, items: [[id, payload, group]])
     @store.set_topic(chat["id"], 101, "Family")
     @store.rows.find { _1["direction"] == direction && _1["source_id"] == id }
   end

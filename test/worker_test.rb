@@ -53,6 +53,30 @@ class WorkerTest < Minitest::Test
     assert_equal 1, @store.pending
   end
 
+  # ---- albums
+
+  def test_album_rows_are_sent_as_one_message_and_all_removed
+    @telegram = FakeTelegram.new(files: { "F1" => "ONE", "F2" => "TWO" })
+    @store.enqueue(max_chat_id: -77, direction: "tg_to_max", due_at: 1000, items: [
+      ["1:0", { text: "", media: { kind: "image", file_id: "F1", filename: "a.jpg" } }, "A1"],
+      ["2:0", { text: "", media: { kind: "image", file_id: "F2", filename: "b.jpg" } }, "A1"]
+    ])
+
+    assert_equal 1, worker.tick
+
+    assert_equal 1, @max.sent.size
+    assert_equal 2, @max.attachments.first.size
+    assert_equal 0, @store.pending
+  end
+
+  def test_album_waits_until_its_time
+    @store.enqueue(max_chat_id: -77, direction: "tg_to_max", due_at: 1002, items: [["1:0", { text: "", media: {} }, "A1"]])
+
+    assert_equal 0, worker.tick
+    @now = 1002
+    assert_equal 1, worker.tick
+  end
+
   # ---- retries
 
   def test_failure_keeps_message_and_retries_with_growing_pause

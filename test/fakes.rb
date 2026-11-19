@@ -38,6 +38,16 @@ class FakeTelegram
     delivered(reply_to)
   end
 
+  def send_media_group(topic_id:, items:, caption: nil, reply_to: nil)
+    guard(topic_id)
+    raise @media_error if @media_error
+
+    @media << { kind: "album", topic_id: topic_id, caption: caption,
+                items: items.map { { kind: _1[:kind], filename: _1[:filename], content: _1[:io].read } } }
+    @replies << reply_to if reply_to
+    items.map { { "message_id" => @last_id += 1 } } # Telegram answers with a list of messages
+  end
+
   def send_location(topic_id:, latitude:, longitude:, reply_to: nil)
     guard(topic_id)
     @media << { kind: "location", topic_id: topic_id, latitude: latitude, longitude: longitude }

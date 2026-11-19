@@ -20,7 +20,8 @@ class RelayTest < Minitest::Test
   def setup
     @store = FakeStore.new
     @worker = FakeWorker.new
-    @relay = Ferry::Relay.new(store: @store, worker: @worker, owner_id: OWNER, group_id: GROUP, logger: Logger.new(nil))
+    @relay = Ferry::Relay.new(store: @store, worker: @worker, owner_id: OWNER, group_id: GROUP, logger: Logger.new(nil),
+                              clock: -> { 1000 })
 
     # Max chat -77 is already linked to Telegram topic 101
     chat = @store.enqueue(max_chat_id: -77, direction: "tg_to_max", items: [])
@@ -127,11 +128,46 @@ class RelayTest < Minitest::Test
     assert_equal "", payloads.first["text"]
   end
 
-  def test_caption_goes_only_to_the_first_attachment
+  def test_several_photos_become_one_album_with_the_caption
     @relay.handle_max_update(max_update(text: "two photos", attachments: [image("https://cdn.example/1.jpg"), image("https://cdn.example/2.jpg")]))
 
-    assert_equal %w[m1:0 m1:1], @store.rows.map { _1["source_id"] }
-    assert_equal ["two photos", ""], payloads.map { _1["text"] }
+    assert_equal ["m1:0"], @store.rows.map { _1["source_id"] }
+    assert_equal "two photos", payloads.first["text"]
+    media = payloads.first["media"]
+    assert_equal "album", media["kind"]
+    assert_equal %w[https://cdn.example/1.jpg https://cdn.example/2.jpg], media["items"].map { _1["url"] }
+  end
+
+  def test_photos_and_videos_share_an_album_but_files_do_not
+    attachments = [
+      image("https://cdn.example/1.jpg"),
+      { "type" => "video", "payload" => { "url" => "https://cdn.example/2.mp4" } },
+      { "type" => "file", "payload" => { "url" => "https://cdn.example/3.pdf", "filename" => "3.pdf" } },
+      { "type" => "file", "payload" => { "url" => "https://cdn.example/4.pdf", "filename" => "4.pdf" } }
+    ]
+
+    @relay.handle_max_update(max_update(text: "all", attachments: attachments))
+
+    medias = payloads.map { _1["media"] }
+    assert_equal %w[album album], medias.map { _1["kind"] }
+    assert_equal [%w[image video], %w[file file]], medias.map { |m| m["items"].map { _1["kind"] } }
+    assert_equal ["all", ""], payloads.map { _1["text"] }
+  end
+
+  def test_a_lone_photo_between_other_attachments_is_not_an_album
+    attachments = [image("https://cdn.example/1.jpg"), { "type" => "audio", "payload" => { "url" => "https://cdn.example/a.m4a" } }]
+
+    @relay.handle_max_update(max_update(text: nil, attachments: attachments))
+
+    assert_equal %w[image voice], payloads.map { _1.dig("media", "kind") }
+  end
+
+  def test_an_album_is_split_when_it_is_longer_than_telegram_allows
+    attachments = Array.new(11) { |i| image("https://cdn.example/#{i}.jpg") }
+
+    @relay.handle_max_update(max_update(text: nil, attachments: attachments))
+
+    assert_equal [10, nil], payloads.map { _1["media"]["items"]&.size }
   end
 
   def test_long_text_does_not_fit_a_caption_and_follows_as_separate_text
@@ -257,6 +293,17 @@ class RelayTest < Minitest::Test
       media = payloads.first["media"]
       assert_equal [kind, "f1", filename], [media["kind"], media["file_id"], media["filename"]], field
     end
+  end
+
+  def test_telegram_album_items_share_a_group_key_and_wait_for_the_rest
+    %w[11 12].each do |id|
+      @relay.handle_telegram_update(telegram_update(text: nil, id: id.to_i,
+                                                    extra: { "photo" => [{ "file_id" => "f#{id}" }], "media_group_id" => "A1" }))
+    end
+    @relay.handle_telegram_update(telegram_update(text: "single", id: 13))
+
+    assert_equal ["A1", "A1", nil], @store.rows.map { _1["group_key"] }
+    assert_equal [1005, 1005, 0], @store.rows.map { _1["next_attempt_at"] }
   end
 
   def test_telegram_animation_wins_over_its_document_copy

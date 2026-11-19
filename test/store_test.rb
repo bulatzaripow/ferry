@@ -107,6 +107,31 @@ class StoreTest < Minitest::Test
     assert_equal({ "author" => "Ivan", "text" => "hello" }, JSON.parse(head(chat)["payload"]))
   end
 
+  # ---- albums
+
+  def test_group_returns_all_rows_of_an_album_in_order
+    chat = @store.enqueue(max_chat_id: -77, direction: "tg_to_max", due_at: 0,
+                          items: [["1:0", { text: "a" }, "g1"], ["2:0", { text: "b" }, "g1"], ["3:0", { text: "c" }, "g2"], ["4:0", { text: "d" }]])
+
+    head = head(chat, "tg_to_max")
+
+    assert_equal %w[1:0 2:0], @store.group(head).map { _1["source_id"] }
+  end
+
+  def test_row_without_group_is_alone
+    chat = enqueue("m1", "m2")
+
+    assert_equal ["m1"], @store.group(head(chat)).map { _1["source_id"] }
+  end
+
+  def test_due_at_delays_the_first_attempt
+    @store.enqueue(max_chat_id: -77, direction: "tg_to_max", items: [["1:0", { text: "a" }, "g1"]], due_at: 100)
+
+    assert_empty @store.due(99)
+    assert_equal ["1:0"], @store.due(100).map { _1["source_id"] }
+    assert_equal 100, @store.next_due_at
+  end
+
   # ---- links between the two messengers (for replies)
 
   def test_links_work_in_both_directions

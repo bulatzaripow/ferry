@@ -52,9 +52,10 @@ module Ferry
     end
 
     def attempt(row)
-      @courier.deliver(row)
-      @store.delete(row["id"])
-      @logger.info("#{row["direction"]}: delivered #{row["source_id"]}")
+      rows = @store.group(row) # one row, or all the rows of an album
+      @courier.deliver(row, rows)
+      rows.each { @store.delete(_1["id"]) }
+      @logger.info("#{row["direction"]}: delivered #{rows.map { _1["source_id"] }.join(", ")}")
     rescue StandardError => e
       retry_later(row, e)
     end

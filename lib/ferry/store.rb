@@ -11,7 +11,7 @@ module Ferry
       @lock = Mutex.new
     end
 
-    def enqueue(max_chat_id:, direction:, items:)
+    def enqueue(max_chat_id:, direction:, items:, due_at: 0)
       chat = nil
 
       sync do
@@ -19,11 +19,11 @@ module Ferry
           @db.execute("INSERT INTO chats (max_chat_id) VALUES (?) ON CONFLICT (max_chat_id) DO NOTHING", [max_chat_id])
           chat = @db.get_first_row("SELECT * FROM chats WHERE max_chat_id = ?", [max_chat_id])
 
-          items.each do |source_id, payload|
+          items.each do |source_id, payload, group_key|
             @db.execute(
-              "INSERT INTO outbox (chat_id, direction, source_id, payload) VALUES (?, ?, ?, ?) " \
-              "ON CONFLICT (direction, source_id) DO NOTHING",
-              [chat["id"], direction, source_id, payload.to_json]
+              "INSERT INTO outbox (chat_id, direction, source_id, payload, group_key, next_attempt_at) " \
+              "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (direction, source_id) DO NOTHING",
+              [chat["id"], direction, source_id, payload.to_json, group_key, due_at]
             )
           end
         end
@@ -45,6 +45,15 @@ module Ferry
     def due(now)
       sync do
         @db.execute("SELECT o.* FROM outbox o WHERE #{HEADS} AND o.next_attempt_at <= ? ORDER BY o.id", [now])
+      end
+    end
+
+    def group(row)
+      return [row] unless row["group_key"]
+
+      sync do
+        @db.execute("SELECT * FROM outbox WHERE chat_id = ? AND direction = ? AND group_key = ? ORDER BY id",
+                    [row["chat_id"], row["direction"], row["group_key"]])
       end
     end
 

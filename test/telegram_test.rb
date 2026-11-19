@@ -87,6 +87,34 @@ class TelegramTest < Minitest::Test
     assert_match(/name="reply_parameters"\r\n\r\n\{"message_id":77,"allow_sending_without_reply":true\}\r\n/, http.requests.first.wire)
   end
 
+  def test_album_is_one_multipart_request_with_caption_on_the_first_item
+    http = FakeHttp.new(ok([{ "message_id" => 1 }, { "message_id" => 2 }]))
+    items = [{ kind: "image", io: StringIO.new("ONE"), filename: "a.jpg" }, { kind: "video", io: StringIO.new("TWO"), filename: "b.mp4" }]
+
+    result = telegram(http).send_media_group(topic_id: 12, items: items, caption: "<b>Ivan</b>", reply_to: 77)
+
+    assert_equal 2, result.size
+    wire = http.requests.first.wire
+    assert_equal "https://api.telegram.org/bottoken/sendMediaGroup", http.requests.first.url
+    assert_match(/name="file0"; filename="a.jpg"\r\n.*\r\n\r\nONE\r\n/m, wire)
+    assert_match(/name="file1"; filename="b.mp4"\r\n.*\r\n\r\nTWO\r\n/m, wire)
+    assert_match(/name="reply_parameters"/, wire)
+    media = JSON.parse(wire[/name="media"\r\n\r\n(.*?)\r\n/, 1])
+    assert_equal [{ "type" => "photo", "media" => "attach://file0", "caption" => "<b>Ivan</b>", "parse_mode" => "HTML" },
+                  { "type" => "video", "media" => "attach://file1", "supports_streaming" => true }], media
+  end
+
+  def test_album_types_follow_the_kinds
+    http = FakeHttp.new(ok([]))
+    items = [{ kind: "file", io: StringIO.new("x"), filename: "a.pdf" }, { kind: "file", io: StringIO.new("y"), filename: "b.pdf" }]
+
+    telegram(http).send_media_group(topic_id: 1, items: items)
+
+    media = JSON.parse(http.requests.first.wire[/name="media"\r\n\r\n(.*?)\r\n/, 1])
+    assert_equal %w[document document], media.map { _1["type"] }
+    refute media.first.key?("caption")
+  end
+
   def test_video_is_sent_for_streaming
     http = FakeHttp.new(ok({}))
 

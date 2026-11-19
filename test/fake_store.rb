@@ -9,14 +9,14 @@ class FakeStore
     @last_id = 0
   end
 
-  def enqueue(max_chat_id:, direction:, items:)
+  def enqueue(max_chat_id:, direction:, items:, due_at: 0)
     chat = (@chats[max_chat_id] ||= { "id" => @chats.size + 1, "max_chat_id" => max_chat_id, "tg_topic_id" => nil })
-    items.each do |source_id, payload|
+    items.each do |source_id, payload, group_key|
       next if @outbox.any? { _1["direction"] == direction && _1["source_id"] == source_id }
 
       @outbox << { "id" => (@last_id += 1), "chat_id" => chat["id"], "direction" => direction,
                    "source_id" => source_id, "payload" => payload.to_json,
-                   "attempts" => 0, "next_attempt_at" => 0, "last_error" => nil }
+                   "attempts" => 0, "next_attempt_at" => due_at, "last_error" => nil, "group_key" => group_key }
     end
     chat
   end
@@ -31,6 +31,13 @@ class FakeStore
 
   def due(now) = heads.select { _1["next_attempt_at"] <= now }
 
+  def group(row)
+    return [row] unless row["group_key"]
+
+    @outbox.select { _1.values_at("chat_id", "direction", "group_key") == row.values_at("chat_id", "direction", "group_key") }
+           .sort_by { _1["id"] }
+  end
+  
   def next_due_at = heads.map { _1["next_attempt_at"] }.min
 
   def link(max_mid, tg_message_id, _now = nil)

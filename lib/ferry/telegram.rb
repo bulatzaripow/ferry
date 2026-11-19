@@ -18,6 +18,9 @@ module Ferry
       "sticker" => %w[sendSticker sticker]
     }.freeze
 
+    # attachment kind => type inside an album (voice messages and stickers can not be in an album)
+    ALBUM_TYPES = { "image" => "photo", "video" => "video", "file" => "document", "audio" => "audio" }.freeze
+
     def initialize(token, group_id, http: Http.new)
       @token = token
       @group_id = group_id
@@ -36,6 +39,19 @@ module Ferry
       params[:supports_streaming] = true if kind == "video"
 
       upload(method, params, field => [io, filename])
+    end
+
+    def send_media_group(topic_id:, items:, caption: nil, reply_to: nil)
+      files = {}
+      media = items.each_with_index.map do |item, i|
+        files["file#{i}"] = [item[:io], item[:filename]]
+        entry = { type: ALBUM_TYPES.fetch(item[:kind]), media: "attach://file#{i}" }
+        entry[:supports_streaming] = true if item[:kind] == "video"
+        entry
+      end
+      media.first.merge!(caption: caption, parse_mode: "HTML") unless caption.to_s.empty?
+
+      upload("sendMediaGroup", target(topic_id, reply_to).merge(media: media.to_json), files)
     end
 
     def send_location(topic_id:, latitude:, longitude:, reply_to: nil)

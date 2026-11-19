@@ -5,14 +5,18 @@ module Ferry
     CHAT_TYPES = %w[dialog chat].freeze
     PART = /.{1,3800}/m # Max accepts 4000 characters, Telegram 4096; the rest is a reserve for the author name
     CAPTION_LIMIT = 1024 # caption of a file in Telegram
+    ALBUM_KINDS = { "image" => :visual, "video" => :visual, "file" => :file }.freeze # what Telegram can group
+    ALBUM_SIZE = 10 # most files in one Telegram album
+    ALBUM_WAIT = 5 # seconds to wait for the other parts of a Telegram album
     NO_CAPTION = %w[location contact sticker].freeze # Telegram has no captions for these
 
-    def initialize(store:, worker:, owner_id:, group_id:, logger: Logger.new($stdout))
+    def initialize(store:, worker:, owner_id:, group_id:, logger: Logger.new($stdout), clock: -> { Time.now.to_i })
       @store = store
       @worker = worker
       @owner_id = owner_id
       @group_id = group_id
       @logger = logger
+      @clock = clock
     end
 
     def handle_max_update(update)
@@ -56,14 +60,15 @@ module Ferry
       reply_to = message.dig("reply_to_message", "message_id")
       # inside a topic every plain message "replies" to the service message that created the topic
       payloads.first["reply_to"] = reply_to if reply_to && reply_to != message["message_thread_id"]
-      queue(chat["max_chat_id"], "tg_to_max", message["message_id"], payloads)
+      queue(chat["max_chat_id"], "tg_to_max", message["message_id"], payloads, group: (message["media_group_id"] if media))
     end
 
     private
 
-    def queue(max_chat_id, direction, source_id, payloads)
-      items = payloads.each_with_index.map { |payload, i| ["#{source_id}:#{i}", payload] }
-      @store.enqueue(max_chat_id: max_chat_id, direction: direction, items: items)
+    def queue(max_chat_id, direction, source_id, payloads, group: nil)
+      items = payloads.each_with_index.map { |payload, i| ["#{source_id}:#{i}", payload, group] }
+      due_at = group ? @clock.call + ALBUM_WAIT : 0
+      @store.enqueue(max_chat_id: max_chat_id, direction: direction, items: items, due_at: due_at)
       @logger.info("#{direction}: queued #{items.map(&:first).join(", ")}")
       @worker.wake
     end
@@ -75,7 +80,7 @@ module Ferry
       base = { "author" => author, "chat_type" => chat_type, "mid" => mid }
       payloads = []
 
-      medias.each do |media|
+      albums(medias).each do |media|
         if NO_CAPTION.include?(media["kind"])
           payloads.concat(text_payloads(base, text.empty? ? media["label"] : text))
           text = ""
@@ -91,6 +96,14 @@ module Ferry
       payloads.concat(text_payloads(base, text)) unless text.empty?
       payloads
     end
+
+    def albums(medias)
+      medias
+        .slice_when { |a, b| !ALBUM_KINDS.key?(a["kind"]) || ALBUM_KINDS[a["kind"]] != ALBUM_KINDS[b["kind"]] }
+        .flat_map { |run| ALBUM_KINDS.key?(run.first["kind"]) ? run.each_slice(ALBUM_SIZE).map { album(_1) } : run }
+    end
+
+    def album(run) = run.one? ? run.first : { "kind" => "album", "items" => run, "label" => "album of #{run.size} files" }
 
     def text_payloads(base, text) = text.scan(PART).map { base.merge("text" => _1) }
 
