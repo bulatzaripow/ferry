@@ -1,3 +1,8 @@
 {$DOMAIN} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
 	reverse_proxy ferry:9292
 }
